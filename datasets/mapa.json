@@ -1,0 +1,35 @@
+[
+  {
+    "bucket": "dados-clinicos",
+    "object": "exames.csv.enc",
+    "campos": [
+      "Data",
+      "Colesterol",
+      "Glicose"
+    ]
+  },
+  {
+    "bucket": "dados-externos",
+    "object": "exames.json.enc",
+    "campos": [
+      "Temperatura",
+      "Colesterol"
+    ]
+  },
+  {
+    "bucket": "dados-laboratorio",
+    "object": "dados.csv.enc",
+    "campos": [
+      "Colesterol",
+      "peso"
+    ]
+  },
+  {
+    "bucket": "dados-laboratorio",
+    "object": "dados.json.enc",
+    "campos": [
+      "Temperatura",
+      "Colestrol"
+    ]
+  }
+]
