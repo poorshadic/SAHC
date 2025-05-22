@@ -1,92 +1,106 @@
-import re
-import csv
 import json
+import re
+from minio import Minio
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
 import os
+import io
 
+# === CONFIGURAÇÃO ===
+mapa_path = "mapa.json"
+pasta_resultados = "resultados_query"
+chave_privada_path = "keys/sgx_private.pem"
+
+# Ligação MinIO
+client = Minio(
+    "localhost:9000",
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    secure=False,
+)
+
+# === 1. Interpretar a query (formato: select AÇÃO(DADO)) ===
 def parse_query(query):
-    """
-    Extrai a ação e o dado da query do tipo 'select AÇÃO (DADO)'
-    Exemplo: 'select SUM(colestrol)' -> ('sum', 'colestrol')
-    """
     regex = r"select\s+(\w+)\s*\(\s*(\w+)\s*\)"
     match = re.match(regex, query.strip(), re.IGNORECASE)
     if not match:
         raise ValueError("Query inválida. Use o formato: select AÇÃO(DADO)")
     operacao = match.group(1).lower()
     dado = match.group(2)
-    if operacao not in ("sum", "avg", "count"):
-        raise ValueError(f"Ação desconhecida: {operacao}")
     return operacao, dado
 
-def extrair_dado_csv(caminho_ficheiro, dado):
-    valores = []
-    with open(caminho_ficheiro, newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        if dado not in reader.fieldnames:
-            return valores
-        for row in reader:
-            val = row.get(dado)
-            if val is not None and val != '':
-                try:
-                    valores.append(float(val))
-                except ValueError:
-                    pass
-    return valores
+# === 2. Desencriptar ficheiro .enc com estrutura híbrida ===
+def desencriptar_ficheiro_enc(dados_encriptados, chave_privada):
+    cipher_rsa = PKCS1_OAEP.new(chave_privada)
 
-def extrair_dado_json(caminho_ficheiro, dado):
-    valores = []
-    with open(caminho_ficheiro, encoding='utf-8') as jsonfile:
-        try:
-            dados = json.load(jsonfile)
-            for item in dados:
-                val = item.get(dado)
-                if val is not None and val != '':
-                    try:
-                        valores.append(float(val))
-                    except ValueError:
-                        pass
-        except Exception:
-            pass
-    return valores
+    with io.BytesIO(dados_encriptados) as f:
+        key_len_bytes = f.read(2)
+        key_len = int.from_bytes(key_len_bytes, byteorder='big')
+        encrypted_aes_key = f.read(key_len)
+        nonce = f.read(12)
+        tag = f.read(16)
+        ciphertext = f.read()
 
-def extrair_dado_arquivo(caminho_ficheiro, dado):
-    if caminho_ficheiro.endswith(".csv"):
-        return extrair_dado_csv(caminho_ficheiro, dado)
-    elif caminho_ficheiro.endswith(".json"):
-        return extrair_dado_json(caminho_ficheiro, dado)
-    else:
-        return []
+    aes_key = cipher_rsa.decrypt(encrypted_aes_key)
+    cipher_aes = AES.new(aes_key, AES.MODE_GCM, nonce=nonce)
+    dados_originais = cipher_aes.decrypt_and_verify(ciphertext, tag)
+    return dados_originais
 
-def calcular(valores, operacao):
-    if not valores:
-        return None
-    if operacao == "sum":
-        return sum(valores)
-    elif operacao == "count":
-        return len(valores)
-    elif operacao == "avg":
-        return sum(valores) / len(valores)
-    else:
-        raise ValueError(f"Operação desconhecida: {operacao}")
+# === 3. Processar a query ===
+def carregar_ficheiros_relevantes(query):
+    # Extrair campo da query
+    _, campo = parse_query(query)
 
-def processar_query(pasta_resultados, query):
-    operacao, dado = parse_query(query)
-    todos_valores = []
-    for ficheiro in os.listdir(pasta_resultados):
-        caminho = os.path.join(pasta_resultados, ficheiro)
-        valores = extrair_dado_arquivo(caminho, dado)
-        todos_valores.extend(valores)
-    resultado = calcular(todos_valores, operacao)
-    return resultado
+    # Carregar mapa
+    with open(mapa_path, "r", encoding="utf-8") as f:
+        mapa = json.load(f)
 
-# --- Exemplo de uso ---
+    # Carregar chave privada da enclave
+    with open(chave_privada_path, "rb") as f:
+        chave_privada = RSA.import_key(f.read())
 
-pasta_resultados = "caminho/para/pasta/desencriptados"
+    # Criar pasta se necessário
+    os.makedirs(pasta_resultados, exist_ok=True)
 
-query1 = "select SUM(colestrol)"
-query2 = "select AVG(colestrol)"
-query3 = "select COUNT(colestrol)"
+    # Filtrar ficheiros que contêm o campo desejado
+    for entrada in mapa:
+        if campo.lower() in [c.lower() for c in entrada["campos"]]:
+            bucket = entrada["bucket"]
+            objeto = entrada["object"]
+            print(f"🔍 A carregar: {objeto} de {bucket}...")
 
-print(processar_query(pasta_resultados, query1))
-print(processar_query(pasta_resultados, query2))
-print(processar_query(pasta_resultados, query3))
+            try:
+                response = client.get_object(bucket, objeto)
+                dados_encriptados = response.read()
+                response.close()
+
+                dados_desencriptados = desencriptar_ficheiro_enc(dados_encriptados, chave_privada)
+
+                # Determinar nome do ficheiro original
+                nome_final = objeto[:-4]  # remove ".enc"
+                caminho_saida = os.path.join(pasta_resultados, nome_final)
+
+                with open(caminho_saida, "wb") as f_out:
+                    f_out.write(dados_desencriptados)
+
+                print(f"✔️ Guardado: {caminho_saida}")
+
+            except Exception as e:
+                print(f"❌ Erro com {objeto}: {e}")
+
+# === Exemplo de uso ===
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("❌ Uso: python3 carregar_ficheiros.py \"select AÇÃO(CAMPO)\"")
+        exit(1)
+
+    query = sys.argv[1]
+    carregar_ficheiros_relevantes(query)
+
+
+
+
+
+
+

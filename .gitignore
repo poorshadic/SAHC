@@ -1,1 +1,3 @@
 minio
+.idea/
+data/.minio.sys/tmp

@@ -11,7 +11,7 @@ with open("keys/sgx_public.pem", "rb") as f:
     cipher_rsa = PKCS1_OAEP.new(pub_key) #criação de ficheiro de encriptação
 
 # 2. Abrir e ler o ficheiro CSV (binary)
-with open("exames.csv", "rb") as f:
+with open("json1.json", "rb") as f:
     dados_medicos = f.read()
 
 # 3. Gerar ficheiro encriptado (binary)
@@ -25,8 +25,8 @@ client = Minio(
     secure=False,
 )
 
-bucket_name = "dados-clinicos" #usar nome de bucket existente
-object_name = "exames.enc" #definir nome do ficheiro a guardar
+bucket_name = "map" #usar nome de bucket existente
+object_name = "map.json.enc" #definir nome do ficheiro a guardar
 
 
 # 1. Criar ficheiro temp.enc com os dados cifrados
