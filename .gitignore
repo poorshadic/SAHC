@@ -1,3 +1,5 @@
 minio
 .idea/
 data/.minio.sys/tmp
+.venv
+sgx/.env
